@@ -5,6 +5,7 @@ import scala.annotation.tailrec
 
 object Generator {
 
+  // Helper token predicates
   private def id(name: String)(t: Token) = {
     t != null && t.getType == Token.IDENTIFIER && t.getText == name
   }
@@ -13,6 +14,7 @@ object Generator {
     t != null && t.getText == name
   }
 
+  private def isId(t: Token) = t != null && t.getType == Token.IDENTIFIER
   private val isTypedef = id("typedef") _
   private val isEnum = id("enum") _
   private val isStruct = id("struct") _
@@ -21,9 +23,10 @@ object Generator {
 
   // Higher level token concept with hierarchy and some semantics
   sealed trait MetaToken
+  case class Empty() extends MetaToken
   case class Single(t: Token) extends MetaToken
-  case class Enum(name: String) extends MetaToken
-  case class Struct(name: String) extends MetaToken
+  case class Enum(name: String, inside: MetaToken) extends MetaToken
+  case class Struct(name: String, inside: MetaToken) extends MetaToken
   case class Scope(ts: Seq[MetaToken]) extends MetaToken
 
   def parseMetatokens(tokens: List[Token]) : List[MetaToken] = {
@@ -44,10 +47,13 @@ object Generator {
     def itr(tokens: List[Token], acc: List[MetaToken]) : List[MetaToken] = {
       tokens match {
         case a :: b :: ts if isTypedef(a) && isEnum(b) => {
-          itr(ts, Enum("[unresolved]") :: acc)
+          itr(ts, Enum("[unresolved]", Empty()) :: acc)
         }
         case a :: b :: ts if isTypedef(a) && isStruct(b) => {
-          itr(ts, Struct("[unresolved]") :: acc)
+          itr(ts, Struct("[unresolved]", Empty()) :: acc)
+        }
+        case a :: b :: ts if isStruct(a) && isId(b) => {
+          itr(ts, Struct(b.getText, Empty()) :: acc)
         }
         case a :: ts if isOpenBrace(a) => {
           val (scope, rest) = parseScope(ts, List.empty)
@@ -60,7 +66,23 @@ object Generator {
       }
     }
 
-    itr(tokens, List.empty).reverse
+    def resolve(metatokens: List[MetaToken]) : List[MetaToken] = {
+      metatokens match {
+        case Enum(_, _) :: Scope(inside) :: Single(name) :: ts => {
+          Enum(name.getText, Scope(inside)) :: resolve(ts)
+        }
+        case Struct(structname, _) :: Scope(inside) :: Single(name) :: ts if structname == "[unresolved]" => {
+          Struct(name.getText, Scope(inside)) :: resolve(ts)
+        }
+        case Struct(name, _) :: Scope(inside) :: ts => {
+          Struct(name, Scope(inside)) :: resolve(ts)
+        }
+        case t :: ts => t :: resolve(ts)
+        case _ => List.empty
+      }
+    }
+
+    resolve(itr(tokens, List.empty).reverse).reverse
   }
 
   def generate(src : String) : Unit = {
@@ -88,8 +110,19 @@ object Generator {
       tp != Token.WHITESPACE && tp != Token.NL && tp != Token.CCOMMENT && tp != Token.CPPCOMMENT
     })
 
-    val metatokens = parseMetatokens(tokens.toList)
+    val enums = parseMetatokens(tokens.toList).filter( t => t.isInstanceOf[Enum] )
 
-    println(metatokens.head.toString)
+    enums.foreach({
+      case Enum(name, inside) => {
+        println(s"enum $name {")
+        inside.asInstanceOf[Scope].ts.foreach({
+          case Single(t) if t.getText == "," => print("\n")
+          case Single(t) => print(t.getText + " ")
+        })
+        println("\n}")
+      }
+      case _ =>
+    })
+
   }
 }
