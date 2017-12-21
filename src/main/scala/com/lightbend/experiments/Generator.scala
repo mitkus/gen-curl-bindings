@@ -40,6 +40,7 @@ object Generator {
   case class Single(t: Token) extends Node
   case class Number(n: Int) extends Node
   case class Enum(name: String, inside: Node) extends Node
+  case class EnumDef(name: String, value: Int) extends Node
   case class Struct(name: String, inside: Node) extends Node
   case class Scope(ts: Seq[Node]) extends Node
 
@@ -125,6 +126,49 @@ object Generator {
     ).reverse
   }
 
+  def parseEnum(enum: Enum) : List[EnumDef] = {
+    def isCommaNode(n: Node) : Boolean = {
+      n match {
+        case Single(t) => t.getText == ","
+        case _ => false
+      }
+    }
+    def eatComma(nodes: List[Node]) = {
+      nodes match {
+        case a :: as if isCommaNode(a) => as
+        case _ => nodes
+      }
+    }
+    def parseDef(nodes: List[Node], nextVal: Int) : (EnumDef, List[Node], Int) = {
+      val (definition, rest) = nodes.span(!isCommaNode(_))
+
+      assert(rest.isEmpty || isCommaNode(rest.head))
+
+      definition match {
+        case Single(name) :: Single(eq) :: Number(value) :: ts => {
+          (EnumDef(name.getText, value), eatComma(rest), value+1)
+        }
+        case Single(name) :: ts => {
+          (EnumDef(name.getText, nextVal), eatComma(rest), nextVal+1)
+        }
+        case _ => throw new Exception("Malformed enum def")
+      }
+    }
+
+    var nodes = enum.inside.asInstanceOf[Scope].ts
+    var nextVal = 0
+    var defs = List.empty[EnumDef]
+
+    while(nodes.nonEmpty) {
+      val (definition, rest, newVal) = parseDef(nodes.toList, nextVal)
+      nodes = rest
+      nextVal = newVal
+      defs = definition :: defs
+    }
+
+    defs.reverse
+  }
+
   def generate(src : String) : Unit = {
     val preprocessor = new Preprocessor()
     preprocessor.addFeature(Feature.DEBUG)
@@ -150,19 +194,16 @@ object Generator {
       tp != Token.WHITESPACE && tp != Token.NL && tp != Token.CCOMMENT && tp != Token.CPPCOMMENT
     })
 
-    val enums = parseNodes(tokens).filter(t => t.isInstanceOf[Enum] )
+    val enums = parseNodes(tokens).filter(t => t.isInstanceOf[Enum]).map(t => t.asInstanceOf[Enum])
 
-    enums.foreach({
-      case Enum(name, inside) => {
-        println(s"enum $name {")
-        inside.asInstanceOf[Scope].ts.foreach({
-          case Single(t) if t.getText == "," => print("\n")
-          case Single(t) => print(t.getText + " ")
-          case Number(n) => print("Int("+ n.toString + ") ")
-        })
-        println("\n}")
-      }
-      case _ =>
+    enums.foreach(enum => {
+      val defs = parseEnum(enum)
+      println("enum " + enum.name + " {")
+      defs.foreach({
+        case EnumDef(name, value) =>
+          println(s"$name = $value")
+      })
+      println("}")
     })
   }
 }
