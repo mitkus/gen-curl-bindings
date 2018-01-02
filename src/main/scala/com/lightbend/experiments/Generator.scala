@@ -44,7 +44,7 @@ object Generator {
   case class Struct(name: String, inside: Node) extends Node
   case class Scope(ts: Seq[Node]) extends Node
 
-  def parseNodes(tokens: List[Token]) : List[Node] = {
+  private def parseNodes(tokens: List[Token]) : List[Node] = {
 
     def parseScope(tokens: List[Token], acc: List[Node] = List.empty) : (Scope, List[Token]) = {
       tokens match {
@@ -126,7 +126,7 @@ object Generator {
     ).reverse
   }
 
-  def parseEnum(enum: Enum) : List[EnumDef] = {
+  private def parseEnum(enum: Enum) : List[EnumDef] = {
     def isCommaNode(n: Node) : Boolean = {
       n match {
         case Single(t) => t.getText == ","
@@ -169,7 +169,7 @@ object Generator {
     defs.reverse
   }
 
-  def generate(src : String) : Unit = {
+  def nodes(src : String) : List[Node] = {
     val preprocessor = new Preprocessor()
     preprocessor.addFeature(Feature.DEBUG)
     preprocessor.addWarning(Warning.IMPORT)
@@ -177,7 +177,7 @@ object Generator {
 
     def toVec(f: Unit => Token): List[Token] = {
       @tailrec
-      def seq(acc : List[Token]) : List[Token] = {
+      def seq(acc: List[Token]): List[Token] = {
         val tok = f()
         if (tok == null || tok.getType == Token.EOF)
           acc
@@ -194,16 +194,36 @@ object Generator {
       tp != Token.WHITESPACE && tp != Token.NL && tp != Token.CCOMMENT && tp != Token.CPPCOMMENT
     })
 
-    val enums = parseNodes(tokens).filter(t => t.isInstanceOf[Enum]).map(t => t.asInstanceOf[Enum])
+    parseNodes(tokens)
+  }
 
-    enums.foreach(enum => {
-      val defs = parseEnum(enum)
-      println("enum " + enum.name + " {")
-      defs.foreach({
-        case EnumDef(name, value) =>
-          println(s"$name = $value")
-      })
-      println("}")
-    })
+  def getEnums(nodes : List[Node]) : Map[String, List[EnumDef]] = {
+    val enums = nodes.flatMap {
+      case n if n.isInstanceOf[Enum] => Some(n.asInstanceOf[Enum])
+      case _ => None
+    }
+
+    enums.map(enum => {
+      (enum.name, parseEnum(enum))
+    }).toMap
+  }
+
+  def enumBinding(name: String, enums: Map[String, List[EnumDef]]) : List[String] = {
+    val defs = enums(name)
+    val prefix = List(
+      s"class $name(val value: CInt) extends AnyVal",
+      s"object $name {"
+    )
+
+    prefix ++ defs.map({
+      case EnumDef(defname, value) => {
+        val shortname = if (defname.startsWith(s"$name"))
+          defname.substring(name.length + 1)
+        else
+          defname
+
+        s"    val $shortname : $name = $value"
+      }
+    }) ++ List("}")
   }
 }
