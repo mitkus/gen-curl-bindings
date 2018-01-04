@@ -222,7 +222,7 @@ object Generator {
         else
           defname
 
-        s"    val $shortname : $name = $value"
+        s"    val $shortname: $name = new $name($value)"
       }
     }) ++ List("}")
   }
